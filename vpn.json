@@ -1,0 +1,209 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS Site-to-Site VPN Lab with StrongSwan",
+  "Parameters": {
+    "KeyName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access"
+    }
+  },
+  "Resources": {
+    "CloudVPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [{"Key": "Name", "Value": "CloudVPC"}]
+      }
+    },
+    "OnPremVPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "192.168.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [{"Key": "Name", "Value": "OnPremVPC"}]
+      }
+    },
+    "CloudIGW": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [{"Key": "Name", "Value": "CloudIGW"}]
+      }
+    },
+    "CloudVPCGWAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"},
+        "InternetGatewayId": {"Ref": "CloudIGW"}
+      }
+    },
+    "CloudPublicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"},
+        "CidrBlock": "10.0.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "AvailabilityZone": {"Fn::Select":[0,{"Fn::GetAZs":""}]}
+      }
+    },
+    "CloudPrivateSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"},
+        "CidrBlock": "10.0.2.0/24",
+        "AvailabilityZone": {"Fn::Select":[0,{"Fn::GetAZs":""}]}
+      }
+    },
+    "OnPremPublicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {"Ref": "OnPremVPC"},
+        "CidrBlock": "192.168.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "AvailabilityZone": {"Fn::Select":[0,{"Fn::GetAZs":""}]}
+      }
+    },
+    "CloudRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"}
+      }
+    },
+    "CloudPublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {"Ref": "CloudRouteTable"},
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {"Ref": "CloudIGW"}
+      }
+    },
+    "CloudSubnetRouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {"Ref": "CloudPublicSubnet"},
+        "RouteTableId": {"Ref": "CloudRouteTable"}
+      }
+    },
+    "OnPremIGW": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [{"Key": "Name", "Value": "OnPremIGW"}]
+      }
+    },
+    "OnPremVPCGWAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {"Ref": "OnPremVPC"},
+        "InternetGatewayId": {"Ref": "OnPremIGW"}
+      }
+    },
+    "StrongSwanSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {"Ref": "OnPremVPC"},
+        "GroupDescription": "StrongSwan SG",
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp","FromPort":22,"ToPort":22,"CidrIp":"0.0.0.0/0"},
+          {"IpProtocol": "udp","FromPort":500,"ToPort":500,"CidrIp":"0.0.0.0/0"},
+          {"IpProtocol": "udp","FromPort":4500,"ToPort":4500,"CidrIp":"0.0.0.0/0"},
+          {"IpProtocol": "50","FromPort":-1,"ToPort":-1,"CidrIp":"0.0.0.0/0"},
+          {"IpProtocol": "icmp","FromPort":-1,"ToPort":-1,"CidrIp":"0.0.0.0/0"}
+        ]
+      }
+    },
+    "TestEC2SG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"},
+        "GroupDescription": "Test EC2 SG",
+        "SecurityGroupIngress": [
+          {"IpProtocol": "tcp","FromPort":22,"ToPort":22,"CidrIp":"0.0.0.0/0"},
+          {"IpProtocol": "icmp","FromPort":-1,"ToPort":-1,"CidrIp":"0.0.0.0/0"}
+        ]
+      }
+    },
+    "StrongSwanEIP": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "StrongSwanEC2": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-08c40ec9ead489470",
+        "InstanceType": "t2.micro",
+        "KeyName": {"Ref": "KeyName"},
+        "SubnetId": {"Ref": "OnPremPublicSubnet"},
+        "SecurityGroupIds": [{"Ref": "StrongSwanSG"}],
+        "UserData": { "Fn::Base64": { "Fn::Join": ["", [
+          "#!/bin/bash\n",
+          "sudo apt update\n",
+          "sudo apt install -y strongswan strongswan-pki iptables-persistent\n",
+          "sudo sysctl -w net.ipv4.ip_forward=1\n",
+          "echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf\n"
+        ]]} }
+      }
+    },
+    "EIPAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "InstanceId": {"Ref": "StrongSwanEC2"},
+        "EIP": {"Ref": "StrongSwanEIP"}
+      }
+    },
+    "TestEC2": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-08c40ec9ead489470",
+        "InstanceType": "t2.micro",
+        "KeyName": {"Ref": "KeyName"},
+        "SubnetId": {"Ref": "CloudPrivateSubnet"},
+        "SecurityGroupIds": [{"Ref": "TestEC2SG"}]
+      }
+    },
+    "CloudVGW": {
+      "Type": "AWS::EC2::VPNGateway",
+      "Properties": {
+        "Type": "ipsec.1",
+        "AmazonSideAsn": 64512
+      }
+    },
+    "VGWAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {"Ref": "CloudVPC"},
+        "VpnGatewayId": {"Ref": "CloudVGW"}
+      }
+    },
+    "CustomerGateway": {
+      "Type": "AWS::EC2::CustomerGateway",
+      "Properties": {
+        "BgpAsn": 65000,
+        "IpAddress": {"Ref": "StrongSwanEIP"},
+        "Type": "ipsec.1"
+      }
+    },
+    "VPNConnection": {
+      "Type": "AWS::EC2::VPNConnection",
+      "Properties": {
+        "Type": "ipsec.1",
+        "CustomerGatewayId": {"Ref": "CustomerGateway"},
+        "VpnGatewayId": {"Ref": "CloudVGW"},
+        "StaticRoutesOnly": true
+      }
+    }
+  },
+  "Outputs": {
+    "StrongSwanPublicIP": {
+      "Description": "Public IP of StrongSwan EC2",
+      "Value": {"Ref": "StrongSwanEIP"}
+    },
+    "TestEC2PrivateIP": {
+      "Description": "Private IP of Cloud Test EC2",
+      "Value": {"Fn::GetAtt":["TestEC2","PrivateIp"]}
+    }
+  }
+}
