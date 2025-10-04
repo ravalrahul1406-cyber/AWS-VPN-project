@@ -1,0 +1,9 @@
+Notes:
+
+Replace "ami-08c40ec9ead489470" with a valid Ubuntu 22.04 AMI for your region.
+
+After deployment, SSH into StrongSwan EC2 and add /etc/ipsec.conf and /etc/ipsec.secrets with the AWS tunnel info.
+
+Add routes in Cloud & On-Prem route tables for CIDRs (10.0.0.0/16 ↔ 192.168.0.0/16).
+
+Security Groups already allow UDP 500/4500, ESP, ICMP, SSH.
